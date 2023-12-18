@@ -1,0 +1,19 @@
+{
+    "name": "discord-giveaway-bot",
+    "version": "1.0.0",
+    "description": "Discord giveaway bot",
+    "main": "index.js",
+    "scripts": {
+      "start": "node index.js"
+    },
+    "author": "Wick",
+    "license": "MIT",
+    "dependencies": {
+      "discord.js": "^13.6.0",
+      "@discordjs/rest": "^0.3.0",
+      "discord-api-types": "^0.26.0",
+      "@discordjs/builders": "^1.7.0",
+      "ms": "^2.1.3"
+    }
+  }
+  
