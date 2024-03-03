@@ -2,12 +2,14 @@ const { Client, Intents, Modal, TextInputComponent, MessageActionRow, MessageEmb
 const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord-api-types/v9');
 const { slash } = require('@discordjs/builders');
+const fs = require('fs');
 const ms = require('ms');
 const config = require('./config.json');
 
 const token = config.token;
 const clientId = config.clientId;
 const guildId = config.guildId;
+const saveCommandRoleId = config.saveCommandRoleId;
 
 const client = new Client({ intents: [Intents.FLAGS.GUILDS, Intents.FLAGS.GUILD_MESSAGES] });
 
@@ -15,14 +17,13 @@ const commands = [
     {
         options: [],
         name: 'setup',
-        name_localizations: undefined,
-        description: 'عمل جيف اواي',
-        description_localizations: undefined,
-        default_permission: undefined,
-        default_member_permissions: '8',
-        dm_permission: undefined,
-        nsfw: undefined
-    }
+        description: 'Set up a giveaway',
+    },
+    {
+        options: [],
+        name: 'give',
+        description: 'Get a list of users who joined the giveaway',
+    },
 ];
 
 const rest = new REST({ version: '9' }).setToken(token);
@@ -52,6 +53,8 @@ function generateCaptcha() {
 }
 
 function startGiveaway(interaction, time, winnersCount, prize, description) {
+    clearUsersFile();
+
     const endTime = Date.now() + ms(time);
     const giveaway = {
         endTime,
@@ -73,6 +76,10 @@ function startGiveaway(interaction, time, winnersCount, prize, description) {
     return giveaway;
 }
 
+function clearUsersFile() {
+    fs.writeFileSync('users.json', '[]', 'utf-8');
+}
+
 function updateGiveawayMessage(giveaway, ended = false) {
     const remainingTime = parseInt(parseInt(giveaway.endTime) / 1000);
 
@@ -82,16 +89,16 @@ function updateGiveawayMessage(giveaway, ended = false) {
 
             const updatedEmbed = new MessageEmbed()
                 .setColor('#00C7FF')
-                .setTitle('🎉 جيف اواي جديد! 🎉')
+                .setTitle('🎉 New Giveaway! 🎉')
                 .addFields(
-                    { name: 'السلعة', value: `🏆 **${giveaway.prize}**`, inline: true },
-                    { name: 'الفائزين', value: `👥 ${giveaway.winnersCount}`, inline: true },
+                    { name: 'Prize', value: `🏆 **${giveaway.prize}**`, inline: true },
+                    { name: 'Winners', value: `👥 ${giveaway.winnersCount}`, inline: true },
                     {
-                        name: 'ينتهي بعد', value: `⏳ ${ended ? '`منتهي`' : `<t:${remainingTime}:R>`}
+                        name: 'Ends In', value: `⏳ ${ended ? '`Ended`' : `<t:${remainingTime}:R>`}
 
                     `, inline: true
                     }, {
-                    name: 'المشاركين', value: `👤 **${giveaway.participants.size}**`, inline: false
+                    name: 'Participants', value: `👤 **${giveaway.participants.size}**`, inline: false
                 }
                 )
                 .setFooter({ text: originalEmbed.footer.text })
@@ -105,22 +112,57 @@ function updateGiveawayMessage(giveaway, ended = false) {
 
 function endGiveaway(giveaway) {
     clearInterval(giveaway.updateInterval);
-    updateGiveawayMessage(giveaway, true)
+    updateGiveawayMessage(giveaway, true);
+
     if (giveaway.participants.size === 0) {
-        client.channels.cache.get(giveaway.channelId).send('لا يوجد مشاركين في الجيف اواي. لم يتم اختيار الفائزين.');
+        client.channels.cache.get(giveaway.channelId).send('No participants in the giveaway. Winners were not chosen.');
         return;
     }
 
-    const winners = Array.from(giveaway.participants)
+    const participants = Array.from(giveaway.participants);
+    participants.forEach(userId => {
+        const user = client.users.cache.get(userId);
+        if (user) {
+            saveUserToFile(user.username);
+        }
+    });
+
+    const winners = participants
         .sort(() => 0.5 - Math.random())
         .slice(0, giveaway.winnersCount)
         .map(userId => `<@${userId}>`);
 
     const winnersText = winners.join(', ');
     const prizeText = giveaway.prize ? `**${giveaway.prize}**` : 'the prize';
-    const announcement = `🎉 انتهى الجيف اواي! مبروك للفائزين: ${winnersText}! لقد فازو ب ${prizeText}! 🎉`;
+    const announcement = `🎉 The giveaway has ended! Congratulations to the winners: ${winnersText}! They won ${prizeText}! 🎉`;
 
     client.channels.cache.get(giveaway.channelId).send(announcement);
+}
+
+function saveUserToFile(username) {
+    let userData = [];
+    try {
+        const data = fs.readFileSync('users.json');
+        userData = JSON.parse(data);
+    } catch (error) {
+        console.error('Error reading users.json:', error);
+    }
+
+    
+    userData.push(username);
+
+    
+    fs.writeFileSync('users.json', JSON.stringify(userData, null, 2), 'utf-8');
+}
+
+function getUsersFromFile() {
+    try {
+        const data = fs.readFileSync('users.json');
+        return JSON.parse(data);
+    } catch (error) {
+        console.error('Error reading users.json:', error);
+        return [];
+    }
 }
 
 function msToTime(duration) {
@@ -136,29 +178,39 @@ function msToTime(duration) {
 client.on('interactionCreate', async interaction => {
     if (!interaction.isCommand()) return;
 
+    if (
+        (interaction.commandName === 'setup' || interaction.commandName === 'give') &&
+        !interaction.member.roles.cache.has(saveCommandRoleId)
+    ) {
+        return interaction.reply({
+            content: 'You do not have the required permissions to use this command.',
+            ephemeral: true
+        });
+    }
+
     if (interaction.commandName === 'setup') {
         const modal = new Modal()
             .setCustomId('giveawaySetup')
-            .setTitle('لوحة جيف اواي');
+            .setTitle('Giveaway Panel');
 
         const timeInput = new TextInputComponent()
             .setCustomId('time')
-            .setLabel("الوقت للجيف اواي (e.g., '10m', '1h')")
+            .setLabel("Giveaway Time (e.g., '10m', '1h')")
             .setStyle('SHORT');
 
         const winnersInput = new TextInputComponent()
             .setCustomId('winners')
-            .setLabel('عدد الفائزين')
+            .setLabel('Number of Winners')
             .setStyle('SHORT');
 
         const prizeInput = new TextInputComponent()
             .setCustomId('prize')
-            .setLabel('السلعة')
+            .setLabel('Prize')
             .setStyle('SHORT');
 
         const descriptionInput = new TextInputComponent()
             .setCustomId('description')
-            .setLabel('وصف الجيف اواي')
+            .setLabel('Giveaway Description')
             .setStyle('PARAGRAPH');
 
         const firstActionRow = new MessageActionRow().addComponents(timeInput);
@@ -169,6 +221,18 @@ client.on('interactionCreate', async interaction => {
         modal.addComponents(firstActionRow, secondActionRow, thirdActionRow, fourthActionRow);
 
         await interaction.showModal(modal);
+    }
+
+    if (interaction.commandName === 'give') {
+        const userList = getUsersFromFile();
+        const userListText = userList.length > 0 ? userList.join('\n') : 'No users have joined the giveaway yet.';
+        
+        const embed = new MessageEmbed()
+            .setColor('#00C7FF')
+            .setTitle('List of Users Who Joined Giveaway')
+            .setDescription(userListText);
+
+        interaction.reply({ embeds: [embed], ephemeral: true });
     }
 });
 
@@ -187,18 +251,18 @@ client.on('interactionCreate', async interaction => {
 
         const embed = new MessageEmbed()
             .setColor('#00C7FF')
-            .setTitle('🎉 جيف اواي جديد! 🎉')
+            .setTitle('🎉 New Giveaway! 🎉')
             .setDescription(`**${description}**`)
-            .addField('السلعة', `🏆 **${prize}**`, true)
-            .addField('عدد الفائزين', `👥 ${winnersCount}`, true)
-            .addField('ينتهي بعد', `⏳ ${msToTime(ms(time))}`, true)
-            .setFooter('اضغط على 🎉 للدخول!')
+            .addField('Prize', `🏆 **${prize}**`, true)
+            .addField('Number of Winners', `👥 ${winnersCount}`, true)
+            .addField('Ends In', `⏳ ${msToTime(ms(time))}`, true)
+            .setFooter('Click on 🎉 to join!')
             .setTimestamp()
-            .setThumbnail('https://media.discordapp.net/attachments/1178000797825503352/1178501200769974373/logo_1.png?ex=65765fc5&is=6563eac5&hm=6cb5054b570777c3e458f8ccf384421a44a97aca2fc8414d26b4f5e31fd9ab54&=&format=webp&width=738&height=675') // Optional: URL to a relevant image such as a prize image
+            .setThumbnail('https://media.discordapp.net/attachments/1178000797825503352/1178501200769974373/logo_1.png?ex=65765fc5&is=6563eac5&hm=6cb5054b570777c3e458f8ccf384421a44a97aca2fc8414d26b4f5e31fd9ab54&=&format=webp&width=738&height=675');
 
         const joinButton = new MessageButton()
             .setCustomId(`joinGiveaway_${giveaway.endTime}`)
-            .setLabel('الانضمام')
+            .setLabel('Join')
             .setStyle('PRIMARY')
             .setEmoji('🎉');
 
@@ -210,7 +274,7 @@ client.on('interactionCreate', async interaction => {
             updateGiveawayMessage(giveaway);
         });
 
-        await interaction.followUp({ content: 'تم الانتهاء من العملية!', ephemeral: true });
+        await interaction.followUp({ content: 'Process completed!', ephemeral: true });
     }
 });
 
@@ -220,27 +284,34 @@ client.on('interactionCreate', async interaction => {
         const giveaway = giveaways.find(g => g.endTime > Date.now() && g.messageId === giveawayId);
 
         if (giveaway) {
-            const captcha = generateCaptcha();
-            captchaChallenges[interaction.user.id] = { captcha, giveawayId };
+            const userId = interaction.user.id;
 
-            const captchaModal = new Modal()
-                .setCustomId('captchaModal')
-                .setTitle(`كود الكابتشا  : ${captcha}`);
+            
+            if (giveaway.participants.has(userId)) {
+                await interaction.reply({ content: 'You have already joined this giveaway!', ephemeral: true });
+            } else {
+                const captcha = generateCaptcha();
+                captchaChallenges[userId] = { captcha, giveawayId };
 
-            const captchaInput = new TextInputComponent()
-                .setCustomId('captchaInput')
-                .setLabel('اكتب كود الكابتشا تحت')
-                .setPlaceholder('Captcha Code')
-                .setStyle('SHORT');
+                const captchaModal = new Modal()
+                    .setCustomId('captchaModal')
+                    .setTitle(`Captcha Code: ${captcha}`);
 
-            const actionRow = new MessageActionRow().addComponents(captchaInput);
+                const captchaInput = new TextInputComponent()
+                    .setCustomId('captchaInput')
+                    .setLabel('Type the captcha code below')
+                    .setPlaceholder('Captcha Code')
+                    .setStyle('SHORT');
 
-            captchaModal.addComponents(actionRow);
+                const actionRow = new MessageActionRow().addComponents(captchaInput);
 
-            await interaction.showModal(captchaModal);
+                captchaModal.addComponents(actionRow);
+
+                await interaction.showModal(captchaModal);
+            }
         } else {
             console.log('Giveaway not found or ended');
-            await interaction.reply({ content: 'هذا الجيف اواي منتهي.', ephemeral: true });
+            await interaction.reply({ content: 'This giveaway has ended.', ephemeral: true });
         }
     }
 
@@ -257,11 +328,11 @@ client.on('interactionCreate', async interaction => {
 
             if (giveaway) {
                 giveaway.participants.add(userId);
-                interaction.reply({ content: 'لقد انضميت لهذا الجيف اواي!', ephemeral: true });
+                interaction.reply({ content: 'You have joined this giveaway!', ephemeral: true });
                 updateGiveawayMessage(giveaway);
             } else {
                 console.log('Valid giveaway not found during CAPTCHA validation');
-                interaction.reply({ content: 'هذا الجيف اواي منتهي او غير متوفر!', ephemeral: true });
+                interaction.reply({ content: 'This giveaway has ended or is no longer available!', ephemeral: true });
             }
         } else {
             console.log('Incorrect CAPTCHA entered');
