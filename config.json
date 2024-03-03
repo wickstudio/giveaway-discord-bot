@@ -1,5 +1,6 @@
 {
 "token": "bot_token",
 "clientId": "bot_id",
-"guildId": "server_id"
+"guildId": "server_id",
+"saveCommandRoleId": "role_id"
 }
